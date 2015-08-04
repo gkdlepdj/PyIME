@@ -2,6 +2,8 @@
 import msvcrt
 # 디버그 로그용
 import logging
+from win32api import GetKeyState
+from win32con import  VK_NUMLOCK
 LOG_FILENAME = 'pyime.log'
 logging.basicConfig(filename=LOG_FILENAME,level=logging.DEBUG,)
 
@@ -25,8 +27,18 @@ JONG_DATA = u" ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ";
 
 # 보통 utf-8방식을 선호하나 커맨드창에 한글이 보이게 하기위해 cp949로 인코딩 
 ENCODING = 'cp949' 
+def isascii(u):
+    logging.debug("isascii u:%s %d", u.encode(ENCODING) , ( 0 < ord(u) < 0xff ) )
+    return ( 0 < ord(u) < 0xff )
+    
+def isprint(c):
+    k = ord(c)
+    return ( 0x20<= k <=0x40 ) or ( 0x7b <=k <= 0x7e ) or \
+               ( 0x41 <= k <= 0x5a) or ( 0x61 <= k <= 0x7a ) 
 
-
+def get_capslock_state():
+    return  GetKeyState( VK_NUMLOCK ) == 1 
+    
 def is_jaum(u_jm):
     """키보드에서 입력된 자모가 자음인지 판단
     
@@ -50,7 +62,6 @@ def engkey2kor(c):
     if c.isupper():
         return upper_to_jm[ord(c)-65]
     return None
-        
        
 def asm(cho,jung,jong):
     """유니코드 알아내기 
@@ -69,7 +80,6 @@ def asm(cho,jung,jong):
     dcho = cho.encode(ENCODING) if cho else "*None"
     djung= jung.encode(ENCODING) if jung else "*None"
     djong = jong.encode(ENCODING) if jong else "*None" 
-    logging.debug("asm(), %s,%s,%s",dcho,djung,djong)
     if cho and not jung and not jong: return cho
     if not cho and jung : return jung    
     idx_cho  = CHO_DATA.find(cho)
@@ -119,20 +129,14 @@ def ime_wprint( u_code , bs=0 ):
         백스페이스를 이용하여 이전 글자를 지운다. 
         이전 글자를 지우는 주요한 이유는 한글자를 조립하는 동안에
         현재커서의 진행을 막기 위함이다. 
-        엔터키 입력시 강제 강제개행을 한다  
         
     @파라미터: u_code: 타입은 유니코드,출력하고자 하는 글자(1개)
     @파라미터: bs: 타입은 정수,백스페이스 횟수 
                한 글자를 지우기 위해선 2회의 백스페이스를 지정해야 한다. 
     """
-    logging.debug("ime_wprint,u_code:%s",u_code.encode(ENCODING))
     for i in range(bs):
         msvcrt.putwch( u"\b" )
-    # 엔터키 입력시 강제 강제개행 
-    if ord(u_code) == 13:
-        msvcrt.putch('\r')
-        msvcrt.putch('\n')
-        return 
+    
     if u_code:
         msvcrt.putwch(u_code)
     
@@ -152,29 +156,61 @@ state = 0
 cho = None
 jung = None 
 jong = None 
-jung1 = None
-jung2 = None
-jong1 = None  #이중모음 첫번째 자음
-jong2 = None  #이중모음 두번째 자음
-
+jung1 = None  # 이중모음 첫번째 모음
+jung2 = None  # 이중모음 두번째 모음 
+jong1 = None  #이중자음 첫번째 자음
+jong2 = None  #이중자음 두번째 자음
+input_list=[]
 if __name__=='__main__':
-    print "영문모드에서 한글을 타이핑 하세요"
+    print """   한영키 사용금지 (영문모드에서만 입력)
+                한영변환 ---> number Lock Key"""
     while True :
         c = msvcrt.getch()
-        jm = engkey2kor(c)
-        if jm :
-            logging.debug("engkey2kor(),%s", jm.encode(ENCODING) )
-        else :
-            logging.debug("engkey2kor()- not eng ==> %s(%d)", c,ord(c) ) 
-        if c=='\b' :
+        # 넘버스크롤 락이 걸려있으면 
+        # 한글입력으로 판단 
+        if not get_capslock_state() :
+            jm = engkey2kor(c)
+        else:
+            #영문입력으로 판단 
+            jm = None
+        # 한글키 작동되면 비프음
+        if ord(c) > 127:
+            msvcrt.putch('\x07')
+            continue
+        # 엔터키 입력 받음     
+        if c == '\r' :
+            if state != 0 :
+                input_list.append( asm(cho,jung,jong) )
+            msvcrt.putch('\r')
+            msvcrt.putch('\n')
+            for uc in input_list:
+                msvcrt.putwch(uc)
+            msvcrt.putch('\r')
+            msvcrt.putch('\n')
+            input_list=[]
+            state = 0 
+            cho=None;jung=None;jong=None
+            continue
+        # 백스페이스 입력받음 
+        if c == '\b' :
             if state==0 :
                 # 이전글자 삭제
                 # 상태0
-                ime_wprint(u' ',2)
+                try :
+                    last_u = input_list.pop()
+                except IndexError as e :
+                    last_u = None
+                if last_u :
+                    if isascii(last_u):
+                        ime_wprint(u' ',1)
+                        msvcrt.putwch( u"\b" )
+                    else:
+                        ime_wprint(u' ',2)   
+                        msvcrt.putwch( u"\b" )
             elif state==1:
                 # 초 초기화
                 # 상태0
-                state==0
+                state=0
                 cho=None
                 msvcrt.putwch( u"\b" )
                 msvcrt.putwch( u"\b" )
@@ -209,12 +245,16 @@ if __name__=='__main__':
             continue 
                 
         if not jm : 
-            #자모이외에 해당하는 문자가 입력 되었다
-            #기존에 조립하던 글자를 완성
-            #특수글자출력 
-            #새로운 시작으로 넘어감 
-            if ( 0x20<= ord(c) <=0x40) or (0x7b <= ord(c)<= 0x7e):
-                ime_wprint( unicode( c, ENCODING ) )
+            # 자모이외에 해당하는 문자가 입력 되었다
+            # 기존에 조립하던 글자를 완성
+            # 특수글자출력 
+            # 새로운 시작으로 넘어감 
+            if state != 0 :
+                input_list.append( asm(cho,jung,jong) )
+            if isprint(c):
+                new_u = unicode( c, ENCODING )
+                ime_wprint( new_u )
+                input_list.append( new_u )
             state=0
             cho=None; jung=None; jong=None 
             continue 
@@ -235,13 +275,14 @@ if __name__=='__main__':
                 #다음 글자로 넘어가면서 
                 #지금 입력된 글자는 시작이 되어야 한다.            
                 state = 1
+                input_list.append( cho )
                 cho=jm; jung=None; jong=None
-                ime_wprint(asm(cho,jung,jong))
-            else:#모음이 입력됨 
+                ime_wprint( asm(cho,jung,jong) )
+            else:
+                #모음이 입력됨 
                 jung = jm
                 state = 2
                 uc = asm(cho,jung,jong) 
-                # logging.debug("text:%s uc:%s","모음이 입력",uc)
                 ime_wprint(uc,2)
         elif state == 2 : #--------------- 중성까지 입력된 상태
             if is_jaum(jm):
@@ -255,7 +296,8 @@ if __name__=='__main__':
                     jong=jm
                     ime_wprint(asm(cho,jung,jong),2)
                 else:
-                    state=1
+                    input_list.append( jung )
+                    state=1                    
                     cho=jm;jung=None;jong=None
                     ime_wprint(asm(cho,jung,jong),2)                
             else :      
@@ -274,12 +316,10 @@ if __name__=='__main__':
                     # 상태는 2
                     # 초성은 없음
                     # 중성은 현재글자를 할당 
-                    ime_wprint(asm(cho,jung,jong),2)
+                    input_list.append( asm(cho,jung,jong) )
                     state = 2
-                    cho=None; jung=jm; jong=None   
+                    cho = None; jung=jm; jong=None   
                     ime_wprint(asm(cho,jung,jong))
-                
-                
         elif state == 3: #--------------- 중성까지 이중모음이 입력된 상태
             if is_jaum(jm) :
                 if cho and asm(cho,jung,jm): #초+중+종으로 한글완성여부 판별 
@@ -292,7 +332,7 @@ if __name__=='__main__':
                     # 새로들어온 글자는 자음이므로
                     # 초성만 할당
                     # 상태는 1
-                    ime_wprint(asm(cho,jung,jong),2)
+                    input_list.append( jung )
                     state = 1 
                     cho=jm; jung=None; jong=None
                     ime_wprint(asm(cho,jung,jong))                
@@ -303,7 +343,7 @@ if __name__=='__main__':
                 # 상태는 2
                 # 초성은 없음
                 # 중성으 현재글자를 할당 
-                ime_wprint(asm(cho,jung,jong),2)
+                input_list.append( asm(cho,jung,jong) )
                 state = 2 
                 cho=None; jung=jm; jong=None
                 ime_wprint(asm(cho,jung,jong))
@@ -323,6 +363,7 @@ if __name__=='__main__':
                     # 자음부터 시작 
                     # 상태는 1
                     ime_wprint(asm(cho,jung,jong),2)
+                    input_list.append( asm(cho,jung,jong) )
                     state=1 
                     cho=jm; jung=None; jong=None
                     ime_wprint(asm(cho,jung,jong))                
@@ -331,7 +372,8 @@ if __name__=='__main__':
                 # 초성 중성으로 글자를 완성 하고
                 # 종성 , 모음 -> 초성 중성으로 셋팅
                 # 상태는 2로 만들어야 함 
-                ime_wprint(asm(cho,jung,None),2)
+                ime_wprint(asm(cho,jung,None),2)  
+                input_list.append( asm(cho,jung,None) )
                 state=2 
                 cho=jong; jung=jm; jong=None
                 ime_wprint( asm(cho,jung,jong))            
@@ -341,6 +383,7 @@ if __name__=='__main__':
                 # 기존글자는 그대로 두고
                 # 새로입력된 자음으로 글자출력
                 # 상태는 1
+                input_list.append( asm(cho,jung,jong) )
                 cho = jm;jung = None ;jong=None
                 ime_wprint(asm(cho,jung,jong))
                 state=1            
@@ -349,7 +392,8 @@ if __name__=='__main__':
                 # 초,중,첫번째종성으로 새로운 글자완성 하여 화면에 출력
                 # 종성마지막자음과 새로입력된 모음으로 초성중성을 완성
                 # 상태는 2
-                ime_wprint(asm(cho,jung,jong1),2)
+                ime_wprint(asm(cho,jung,jong1),2)  
+                input_list.append( asm(cho,jung,jong1) )
                 cho = jong2;jung = jm ;jong=None
                 ime_wprint(asm(cho,jung,jong))
                 state = 2     
